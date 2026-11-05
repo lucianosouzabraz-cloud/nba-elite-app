@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 
 # ==========================================
-# CONFIGURAÇÃO DA PÁGINA E ESTILO CSS
+# CONFIGURAÇÃO DA PÁGINA E CSS
 # ==========================================
 st.set_page_config(page_title="NBA Elite Analytics", layout="wide")
 st.title("🏀 NBA - Análise Estatística por Jogador")
@@ -64,11 +64,11 @@ TEAMS_ESPN = {
 }
 
 # ==========================================
-# FUNÇÕES DE BUSCA DE DADOS
+# FUNÇÕES DE BUSCA DE DADOS (ESPN API)
 # ==========================================
 @st.cache_data(ttl=3600)
 def obter_elenco_time(team_abbr):
-    """Retorna os jogadores do time selecionado."""
+    """Busca o elenco do time selecionado."""
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_abbr}/roster"
     try:
         res = requests.get(url, timeout=15)
@@ -88,8 +88,8 @@ def obter_elenco_time(team_abbr):
     return pd.DataFrame(columns=['PLAYER', 'ESPN_ID'])
 
 @st.cache_data(ttl=1800)
-def obter_gamelog_preciso(espn_id):
-    """Busca os estatísticas jogo a jogo com mapeamento estruturado exato."""
+def obter_gamelog_correto(espn_id):
+    """Busca os estatísticas jogo a jogo e ajusta as colunas na ordem exata."""
     url = f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
     try:
         res = requests.get(url, timeout=15)
@@ -101,35 +101,36 @@ def obter_gamelog_preciso(espn_id):
             logs = []
             for stype in season_types:
                 for category in stype.get('categories', []):
-                    # Identifica a ordem exata dos rótulos de estatísticas
-                    labels = category.get('names', [])
                     for event in category.get('events', []):
-                        event_id = event.get('eventId')
-                        event_info = events_dict.get(str(event_id), {})
+                        event_id = str(event.get('eventId'))
+                        event_info = events_dict.get(event_id, {})
                         
-                        # Data do jogo e adversário
-                        game_date = event_info.get('gameDate', '')
+                        # Extrai o adversário e mando de campo
                         opponent = event_info.get('opponent', {}).get('abbreviation', '')
                         home_away = '@' if event_info.get('homeAway') == 'away' else 'x'
                         
-                        stats_values = event.get('stats', [])
-                        if stats_values and labels:
-                            # Cria dicionário {NOME_STAT: VALOR}
-                            stat_map = dict(zip(labels, stats_values))
-                            
+                        # Formata a Data (Ex: 05/11)
+                        game_date_str = event_info.get('gameDate', '')
+                        if game_date_str:
+                            data_fmt = pd.to_datetime(game_date_str).strftime('%d/%m')
+                        else:
+                            data_fmt = ""
+                        
+                        stats = event.get('stats', [])
+                        # Ordem corrigida dos índices numéricos da ESPN
+                        if stats and len(stats) >= 13:
                             logs.append({
-                                'GAME_DATE': game_date,
-                                'MATCHUP': f"{home_away} {opponent}",
-                                'MIN': stat_map.get('MIN', '0'),
-                                'PTS': int(stat_map.get('PTS', 0)) if str(stat_map.get('PTS', 0)).isdigit() else 0,
-                                'AQ': stat_map.get('FG', '0-0'),
-                                '3PT': stat_map.get('3PT', '0-0'),
-                                'LL': stat_map.get('FT', '0-0'),
-                                'REB': int(stat_map.get('REB', 0)) if str(stat_map.get('REB', 0)).isdigit() else 0,
-                                'AST': int(stat_map.get('AST', 0)) if str(stat_map.get('AST', 0)).isdigit() else 0,
-                                'RBD': int(stat_map.get('STL', 0)) if str(stat_map.get('STL', 0)).isdigit() else 0,
-                                'BLQ': int(stat_map.get('BLK', 0)) if str(stat_map.get('BLK', 0)).isdigit() else 0,
-                                'BP': int(stat_map.get('TO', 0)) if str(stat_map.get('TO', 0)).isdigit() else 0
+                                'Jogo': f"{data_fmt} {home_away} {opponent}".strip(),
+                                'MIN': stats[0],
+                                'PTS': stats[13] if len(stats) > 13 else stats[1],
+                                'AQ': stats[1],    # Field Goals (FG)
+                                '3PT': stats[3],   # 3-Point (3PT)
+                                'LL': stats[5],    # Free Throws (FT)
+                                'REB': stats[7],   # Total Rebounds (REB)
+                                'AST': stats[8],   # Assists (AST)
+                                'RBD': stats[9],   # Steals (Roubos)
+                                'BLQ': stats[10],  # Blocks (Bloqueios)
+                                'BP': stats[11]    # Turnovers (Erros)
                             })
             return pd.DataFrame(logs)
     except Exception:
@@ -145,7 +146,7 @@ st.sidebar.header("🔍 Seleção de Filtros")
 time_selecionado = st.sidebar.selectbox("Escolha o Time:", list(TEAMS_ESPN.keys()))
 team_abbr = TEAMS_ESPN[time_selecionado]
 
-# 2. Seleção do Jogador
+# 2. Seleção do Jogador (Filtrado estritamente pelo time)
 df_elenco = obter_elenco_time(team_abbr)
 
 if not df_elenco.empty:
@@ -165,41 +166,30 @@ st.subheader(f"📊 Estatísticas: {jogador_selecionado} ({time_selecionado}) - 
 
 try:
     with st.spinner("Buscando estatísticas atualizadas da NBA..."):
-        df_raw = obter_gamelog_preciso(espn_id)
+        df_display = obter_gamelog_correto(espn_id)
     
-    if not df_raw.empty:
-        df_display = pd.DataFrame()
+    if not df_display.empty:
+        # Converter estatísticas para inteiros para calcular as médias no topo
+        pts_num = pd.to_numeric(df_display['PTS'], errors='coerce').fillna(0)
+        reb_num = pd.to_numeric(df_display['REB'], errors='coerce').fillna(0)
+        ast_num = pd.to_numeric(df_display['AST'], errors='coerce').fillna(0)
+        min_num = pd.to_numeric(df_display['MIN'], errors='coerce').fillna(0)
         
-        # Coluna Jogo (Ex: 05/11 @ Kings ou 03/11 x Heat)
-        df_display['Jogo'] = pd.to_datetime(df_raw['GAME_DATE']).dt.strftime('%d/%m') + " " + df_raw['MATCHUP']
-        
-        # Estatísticas exatas organizadas
-        df_display['MIN'] = df_raw['MIN']
-        df_display['PTS'] = df_raw['PTS']
-        df_display['AQ'] = df_raw['AQ']
-        df_display['3PT'] = df_raw['3PT']
-        df_display['LL'] = df_raw['LL']
-        df_display['REB'] = df_raw['REB']
-        df_display['AST'] = df_raw['AST']
-        df_display['RBD'] = df_raw['RBD']
-        df_display['BLQ'] = df_raw['BLQ']
-        df_display['BP'] = df_raw['BP']
-        
-        # Cards de Médias
+        # Cards de Médias no Topo
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Média PTS", round(df_raw['PTS'].mean(), 1))
-        col2.metric("Média REB", round(df_raw['REB'].mean(), 1))
-        col3.metric("Média AST", round(df_raw['AST'].mean(), 1))
-        col4.metric("Total de Jogos", len(df_raw))
-        col5.metric("Média Minutos", round(pd.to_numeric(df_raw['MIN'], errors='coerce').mean(), 1))
+        col1.metric("Média PTS", round(pts_num.mean(), 1))
+        col2.metric("Média REB", round(reb_num.mean(), 1))
+        col3.metric("Média AST", round(ast_num.mean(), 1))
+        col4.metric("Total de Jogos", len(df_display))
+        col5.metric("Média Minutos", round(min_num.mean(), 1))
         
         st.divider()
         
-        # Tabela HTML Compacta e Centralizada
+        # Renderização da Tabela HTML Centralizada
         html_table = df_display.to_html(classes='nba-table', index=False, escape=False)
         st.markdown(f'<div class="tabela-container">{html_table}</div>', unsafe_allow_html=True)
     else:
-        st.warning(f"Nenhuma partida registrada para {jogador_selecionado} nesta temporada.")
+        st.warning(f"Nenhuma partida encontrada para {jogador_selecionado} na temporada selecionada.")
 
 except Exception as e:
     st.error(f"Erro ao processar estatísticas: {e}")
