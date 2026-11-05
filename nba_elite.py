@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
-from nba_api.stats.static import teams
-from nba_api.stats.endpoints import commonteamroster, playergamelog
+import requests
 
 # ==========================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO DA PÁGINA E CSS
 # ==========================================
 st.set_page_config(page_title="NBA Elite Analytics", layout="wide")
 st.title("🏀 NBA - Análise Estatística por Jogador")
@@ -51,27 +50,78 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# FUNÇÕES DE CACHE E BUSCA DE DADOS
-# ==========================================
-@st.cache_data(ttl=86400)
-def obter_todos_times():
-    """Retorna a lista de times da NBA organizada por nome."""
-    nba_teams = teams.get_teams()
-    df_teams = pd.DataFrame(nba_teams)
-    return df_teams.sort_values(by="full_name")
+# Mapeamento oficial das siglas de times da NBA na ESPN API
+TEAMS_ESPN = {
+    "Atlanta Hawks": "atl", "Boston Celtics": "bos", "Brooklyn Nets": "bkn",
+    "Charlotte Hornets": "cha", "Chicago Bulls": "chi", "Cleveland Cavaliers": "cle",
+    "Dallas Mavericks": "dal", "Denver Nuggets": "den", "Detroit Pistons": "det",
+    "Golden State Warriors": "gsw", "Houston Rockets": "hou", "Indiana Pacers": "ind",
+    "LA Clippers": "lac", "Los Angeles Lakers": "lal", "Memphis Grizzlies": "mem",
+    "Miami Heat": "mia", "Milwaukee Bucks": "mil", "Minnesota Timberwolves": "min",
+    "New Orleans Pelicans": "nop", "New York Knicks": "nyk", "Oklahoma City Thunder": "okc",
+    "Orlando Magic": "orl", "Philadelphia 76ers": "phi", "Phoenix Suns": "phx",
+    "Portland Trail Blazers": "por", "Sacramento Kings": "sac", "San Antonio Spurs": "sas",
+    "Toronto Raptors": "tor", "Utah Jazz": "uta", "Washington Wizards": "was"
+}
 
+# ==========================================
+# FUNÇÕES DE BUSCA (API ABERTA DA ESPN)
+# ==========================================
 @st.cache_data(ttl=3600)
-def obter_elenco_time(team_id):
-    """Retorna os jogadores do time selecionado."""
-    roster = commonteamroster.CommonTeamRoster(team_id=team_id).get_data_frames()[0]
-    return roster[['PLAYER', 'PLAYER_ID']].sort_values(by="PLAYER")
+def obter_elenco_time(team_abbr):
+    """Busca estritamente os jogadores do time selecionado sem bloqueios de IP."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_abbr}/roster"
+    try:
+        res = requests.get(url, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            jogadores = []
+            for athlete in data.get('athletes', []):
+                jogadores.append({
+                    'PLAYER': athlete.get('fullName'),
+                    'ESPN_ID': athlete.get('id')
+                })
+            df = pd.DataFrame(jogadores)
+            if not df.empty:
+                return df.sort_values(by="PLAYER")
+    except Exception:
+        pass
+    return pd.DataFrame(columns=['PLAYER', 'ESPN_ID'])
 
 @st.cache_data(ttl=1800)
-def obter_logs_jogador(player_id, season="2026-27"):
-    """Busca o histórico de jogos do jogador na temporada especificada."""
-    gamelog = playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
-    return gamelog
+def obter_logs_jogador(espn_id):
+    """Busca o histórico de partidas jogo a jogo via ESPN."""
+    url = f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
+    try:
+        res = requests.get(url, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            season_types = data.get('seasonTypes', [])
+            logs = []
+            for stype in season_types:
+                for category in stype.get('categories', []):
+                    for event in category.get('events', []):
+                        stats = event.get('stats', [])
+                        if stats and len(stats) >= 13:
+                            logs.append({
+                                'GAME_DATE': event.get('gameDate', ''),
+                                'MATCHUP': event.get('opponent', {}).get('abbreviation', ''),
+                                'HOME_AWAY': '@' if event.get('homeAway') == 'away' else 'x',
+                                'MIN': stats[0],
+                                'PTS': int(stats[13]) if len(stats) > 13 and str(stats[13]).isdigit() else 0,
+                                'AQ': stats[1],   # Field Goals (FG)
+                                '3PT': stats[3],  # 3-Point Field Goals (3PT)
+                                'LL': stats[5],   # Free Throws (FT)
+                                'REB': int(stats[8]) if str(stats[8]).isdigit() else 0,
+                                'AST': int(stats[9]) if str(stats[9]).isdigit() else 0,
+                                'BLQ': int(stats[10]) if str(stats[10]).isdigit() else 0,
+                                'RBD': int(stats[11]) if str(stats[11]).isdigit() else 0, # Steals (Roubos)
+                                'BP': int(stats[12]) if str(stats[12]).isdigit() else 0    # Turnovers
+                            })
+            return pd.DataFrame(logs)
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 # ==========================================
 # SIDEBAR - SELEÇÃO DE FILTROS
@@ -79,69 +129,64 @@ def obter_logs_jogador(player_id, season="2026-27"):
 st.sidebar.header("🔍 Seleção de Filtros")
 
 # 1. Seleção do Time
-df_times = obter_todos_times()
-time_selecionado = st.sidebar.selectbox("Escolha o Time:", df_times['full_name'].values)
-team_id = df_times[df_times['full_name'] == time_selecionado]['id'].values[0]
+time_selecionado = st.sidebar.selectbox("Escolha o Time:", list(TEAMS_ESPN.keys()))
+team_abbr = TEAMS_ESPN[time_selecionado]
 
-# 2. Seleção do Jogador (Filtrado pelo time)
-df_elenco = obter_elenco_time(team_id)
-jogador_selecionado = st.sidebar.selectbox("Escolha o Jogador:", df_elenco['PLAYER'].values)
-player_id = df_elenco[df_elenco['PLAYER'] == jogador_selecionado]['PLAYER_ID'].values[0]
+# 2. Seleção do Jogador (FILTRADO STRICTAMENTE PELO TIME)
+df_elenco = obter_elenco_time(team_abbr)
+
+if not df_elenco.empty:
+    jogador_selecionado = st.sidebar.selectbox("Escolha o Jogador:", df_elenco['PLAYER'].values)
+    espn_id = df_elenco[df_elenco['PLAYER'] == jogador_selecionado]['ESPN_ID'].values[0]
+else:
+    st.sidebar.warning("Carregando elenco...")
+    st.stop()
 
 # 3. Seleção da Temporada
-temporada = st.sidebar.selectbox(
-    "Temporada:", 
-    ["2026-27", "2025-26", "2024-25", "2023-24"], 
-    index=0
-)
+temporada = st.sidebar.selectbox("Temporada:", ["2026-27", "2025-26", "2024-25"], index=0)
 
 # ==========================================
-# QUADRO PRINCIPAL - PROCESSAMENTO E TABELA
+# QUADRO PRINCIPAL
 # ==========================================
 st.subheader(f"📊 Estatísticas: {jogador_selecionado} ({time_selecionado}) - Temporada {temporada}")
 
 try:
     with st.spinner("Buscando estatísticas atualizadas da NBA..."):
-        df_raw = obter_logs_jogador(player_id, season=temporada)
+        df_raw = obter_logs_jogador(espn_id)
     
     if not df_raw.empty:
         df_display = pd.DataFrame()
         
-        # Jogo (Ex: 05/11 @ Kings ou x Heat)
-        df_display['Jogo'] = pd.to_datetime(df_raw['GAME_DATE']).dt.strftime('%d/%m') + " " + df_raw['MATCHUP']
+        # Formatação idêntica do Jogo (Ex: 05/11 @ SAC ou x MIA)
+        df_display['Jogo'] = pd.to_datetime(df_raw['GAME_DATE']).dt.strftime('%d/%m') + " " + df_raw['HOME_AWAY'] + " " + df_raw['MATCHUP']
         
-        # Minutos e Pontos
+        # Colunas na mesma ordem do seu print
         df_display['MIN'] = df_raw['MIN']
         df_display['PTS'] = df_raw['PTS']
-        
-        # Arremessos no formato "Convertidos-Tentados" (ex: 11-23)
-        df_display['AQ'] = df_raw['FGM'].astype(str) + "-" + df_raw['FGA'].astype(str)
-        df_display['3PT'] = df_raw['FG3M'].astype(str) + "-" + df_raw['FG3A'].astype(str)
-        df_display['LL'] = df_raw['FTM'].astype(str) + "-" + df_raw['FTA'].astype(str)
-        
-        # Rebotes, Assistências, Roubos, Bloqueios e Turnovers
+        df_display['AQ'] = df_raw['AQ']
+        df_display['3PT'] = df_raw['3PT']
+        df_display['LL'] = df_raw['LL']
         df_display['REB'] = df_raw['REB']
         df_display['AST'] = df_raw['AST']
-        df_display['RBD'] = df_raw['STL']  # Roubos de Bola
-        df_display['BLQ'] = df_raw['BLK']  # Bloqueios/Tocos
-        df_display['BP'] = df_raw['TOV']   # Turnovers/Erros
+        df_display['RBD'] = df_raw['RBD']
+        df_display['BLQ'] = df_raw['BLQ']
+        df_display['BP'] = df_raw['BP']
         
         # Cards de Médias no Topo
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Média PTS", round(df_raw['PTS'].mean(), 1))
         col2.metric("Média REB", round(df_raw['REB'].mean(), 1))
         col3.metric("Média AST", round(df_raw['AST'].mean(), 1))
-        col4.metric("Média 3PT Convertidos", round(df_raw['FG3M'].mean(), 1))
-        col5.metric("Média Minutos", round(df_raw['MIN'].mean(), 1))
+        col4.metric("Total de Jogos", len(df_raw))
+        col5.metric("Média Minutos", round(pd.to_numeric(df_raw['MIN'], errors='coerce').mean(), 1))
         
         st.divider()
         
-        # Renderização da Tabela HTML (Centralizado e Compacto)
+        # Tabela HTML Compacta e Centralizada
         html_table = df_display.to_html(classes='nba-table', index=False, escape=False)
         st.markdown(f'<div class="tabela-container">{html_table}</div>', unsafe_allow_html=True)
-        
     else:
-        st.warning(f"O jogador {jogador_selecionado} ainda não possui partidas registradas na temporada {temporada}.")
+        st.warning(f"Nenhuma partida encontrada para {jogador_selecionado} na temporada selecionada.")
 
 except Exception as e:
-    st.error(f"Erro ao carregar dados da NBA: {e}")
+    st.error(f"Erro ao processar estatísticas: {e}")
