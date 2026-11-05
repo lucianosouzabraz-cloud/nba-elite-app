@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 
 # ==========================================
-# CONFIGURAÇÃO DA PÁGINA E CSS
+# CONFIGURAÇÃO DA PÁGINA E ESTILO CSS
 # ==========================================
 st.set_page_config(page_title="NBA Elite Analytics", layout="wide")
 st.title("🏀 NBA - Análise Estatística por Jogador")
@@ -63,6 +63,17 @@ TEAMS_ESPN = {
     "Toronto Raptors": "tor", "Utah Jazz": "uta", "Washington Wizards": "was"
 }
 
+# Dicionário para formatar os nomes dos adversários exatamente como no print original
+TEAM_NAMES_MAP = {
+    'SAC': 'Kings', 'MIA': 'Heat', 'TOR': 'Raptors', 'GS': 'Warriors', 'GSW': 'Warriors',
+    'LAC': 'Clippers', 'POR': 'Trail Blazers', 'UTAH': 'Jazz', 'UTA': 'Jazz', 'DEN': 'Nuggets',
+    'ATL': 'Hawks', 'BOS': 'Celtics', 'BKN': 'Nets', 'CHA': 'Hornets', 'CHI': 'Bulls',
+    'CLE': 'Cavaliers', 'DAL': 'Mavericks', 'DET': 'Pistons', 'HOU': 'Rockets', 'IND': 'Pacers',
+    'LAL': 'Lakers', 'MEM': 'Grizzlies', 'MIL': 'Bucks', 'MIN': 'Timberwolves', 'NOP': 'Pelicans',
+    'NYK': 'Knicks', 'OKC': 'Thunder', 'ORL': 'Magic', 'PHI': '76ers', 'PHX': 'Suns',
+    'SAS': 'Spurs', 'WAS': 'Wizards'
+}
+
 # ==========================================
 # FUNÇÕES DE BUSCA DE DADOS (ESPN API)
 # ==========================================
@@ -89,7 +100,7 @@ def obter_elenco_time(team_abbr):
 
 @st.cache_data(ttl=1800)
 def obter_gamelog_correto(espn_id):
-    """Busca os estatísticas jogo a jogo e ajusta as colunas na ordem exata."""
+    """Busca os estatísticas jogo a jogo e ajusta a ordem exata das colunas."""
     url = f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
     try:
         res = requests.get(url, timeout=15)
@@ -105,9 +116,13 @@ def obter_gamelog_correto(espn_id):
                         event_id = str(event.get('eventId'))
                         event_info = events_dict.get(event_id, {})
                         
-                        # Extrai o adversário e mando de campo
-                        opponent = event_info.get('opponent', {}).get('abbreviation', '')
-                        home_away = '@' if event_info.get('homeAway') == 'away' else 'x'
+                        # Extrai a sigla do adversário e converte para o nome legível
+                        raw_opponent = event_info.get('opponent', {}).get('abbreviation', '')
+                        nome_adversario = TEAM_NAMES_MAP.get(raw_opponent, raw_opponent)
+                        
+                        # Define Mando de Campo: '@' para jogo fora, 'x' para jogo em casa
+                        home_away_flag = event_info.get('homeAway', '')
+                        simbolo_mando = '@' if home_away_flag == 'away' else 'x'
                         
                         # Formata a Data (Ex: 05/11)
                         game_date_str = event_info.get('gameDate', '')
@@ -117,10 +132,9 @@ def obter_gamelog_correto(espn_id):
                             data_fmt = ""
                         
                         stats = event.get('stats', [])
-                        # Ordem corrigida dos índices numéricos da ESPN
                         if stats and len(stats) >= 13:
                             logs.append({
-                                'Jogo': f"{data_fmt} {home_away} {opponent}".strip(),
+                                'Jogo': f"{data_fmt} {simbolo_mando} {nome_adversario}".strip(),
                                 'MIN': stats[0],
                                 'PTS': stats[13] if len(stats) > 13 else stats[1],
                                 'AQ': stats[1],    # Field Goals (FG)
@@ -128,9 +142,9 @@ def obter_gamelog_correto(espn_id):
                                 'LL': stats[5],    # Free Throws (FT)
                                 'REB': stats[7],   # Total Rebounds (REB)
                                 'AST': stats[8],   # Assists (AST)
-                                'RBD': stats[9],   # Steals (Roubos)
-                                'BLQ': stats[10],  # Blocks (Bloqueios)
-                                'BP': stats[11]    # Turnovers (Erros)
+                                'RBD': stats[10],  # Steals (Roubos de Bola) - Corrigido
+                                'BLQ': stats[9],   # Blocks (Bloqueios/Tocos) - Corrigido
+                                'BP': stats[11]    # Turnovers (Bolas Perdidas) - Corrigido
                             })
             return pd.DataFrame(logs)
     except Exception:
@@ -146,7 +160,7 @@ st.sidebar.header("🔍 Seleção de Filtros")
 time_selecionado = st.sidebar.selectbox("Escolha o Time:", list(TEAMS_ESPN.keys()))
 team_abbr = TEAMS_ESPN[time_selecionado]
 
-# 2. Seleção do Jogador (Filtrado estritamente pelo time)
+# 2. Seleção do Jogador
 df_elenco = obter_elenco_time(team_abbr)
 
 if not df_elenco.empty:
