@@ -63,7 +63,7 @@ TEAMS_ESPN = {
     "Toronto Raptors": "tor", "Utah Jazz": "uta", "Washington Wizards": "was"
 }
 
-# Dicionário para formatar os nomes dos adversários exatamente como no print original
+# Dicionário de formatação exata dos adversários
 TEAM_NAMES_MAP = {
     'SAC': 'Kings', 'MIA': 'Heat', 'TOR': 'Raptors', 'GS': 'Warriors', 'GSW': 'Warriors',
     'LAC': 'Clippers', 'POR': 'Trail Blazers', 'UTAH': 'Jazz', 'UTA': 'Jazz', 'DEN': 'Nuggets',
@@ -100,7 +100,7 @@ def obter_elenco_time(team_abbr):
 
 @st.cache_data(ttl=1800)
 def obter_gamelog_correto(espn_id):
-    """Busca os estatísticas jogo a jogo e ajusta a ordem exata das colunas."""
+    """Busca os estatísticas jogo a jogo resolvendo dinamicamente as chaves de colunas."""
     url = f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
     try:
         res = requests.get(url, timeout=15)
@@ -112,39 +112,40 @@ def obter_gamelog_correto(espn_id):
             logs = []
             for stype in season_types:
                 for category in stype.get('categories', []):
+                    # Pega a ordem exata das colunas declaradas pela API (ex: ['MIN', 'FG', '3PT', ..., 'TO', 'PF', 'PTS'])
+                    labels = category.get('names', [])
                     for event in category.get('events', []):
                         event_id = str(event.get('eventId'))
                         event_info = events_dict.get(event_id, {})
                         
-                        # Extrai a sigla do adversário e converte para o nome legível
                         raw_opponent = event_info.get('opponent', {}).get('abbreviation', '')
                         nome_adversario = TEAM_NAMES_MAP.get(raw_opponent, raw_opponent)
                         
-                        # Define Mando de Campo: '@' para jogo fora, 'x' para jogo em casa
                         home_away_flag = event_info.get('homeAway', '')
                         simbolo_mando = '@' if home_away_flag == 'away' else 'x'
                         
-                        # Formata a Data (Ex: 05/11)
                         game_date_str = event_info.get('gameDate', '')
-                        if game_date_str:
-                            data_fmt = pd.to_datetime(game_date_str).strftime('%d/%m')
-                        else:
-                            data_fmt = ""
+                        data_fmt = pd.to_datetime(game_date_str).strftime('%d/%m') if game_date_str else ""
                         
                         stats = event.get('stats', [])
-                        if stats and len(stats) >= 13:
+                        
+                        if stats and labels:
+                            # Monta o dicionário dinâmico por chave real da API
+                            stat_map = dict(zip(labels, stats))
+                            
                             logs.append({
                                 'Jogo': f"{data_fmt} {simbolo_mando} {nome_adversario}".strip(),
-                                'MIN': stats[0],
-                                'PTS': stats[13] if len(stats) > 13 else stats[1],
-                                'AQ': stats[1],    # Field Goals (FG)
-                                '3PT': stats[3],   # 3-Point (3PT)
-                                'LL': stats[5],    # Free Throws (FT)
-                                'REB': stats[7],   # Total Rebounds (REB)
-                                'AST': stats[8],   # Assists (AST)
-                                'RBD': stats[10],  # Steals (Roubos de Bola) - Corrigido
-                                'BLQ': stats[9],   # Blocks (Bloqueios/Tocos) - Corrigido
-                                'BP': stats[11]    # Turnovers (Bolas Perdidas) - Corrigido
+                                'MIN': stat_map.get('MIN', '0'),
+                                'PTS': stat_map.get('PTS', '0'),
+                                'AQ': stat_map.get('FG', '0-0'),
+                                '3PT': stat_map.get('3PT', '0-0'),
+                                'LL': stat_map.get('FT', '0-0'),
+                                'REB': stat_map.get('REB', '0'),
+                                'AST': stat_map.get('AST', '0'),
+                                'RBD': stat_map.get('STL', '0'),  # Steals -> Roubos de Bola
+                                'BLQ': stat_map.get('BLK', '0'),  # Blocks -> Bloqueios
+                                'BP': stat_map.get('TO', '0'),    # Turnovers -> Bolas Perdidas
+                                'FP': stat_map.get('PF', '0')     # Personal Fouls -> Faltas Pessoais
                             })
             return pd.DataFrame(logs)
     except Exception:
@@ -183,7 +184,6 @@ try:
         df_display = obter_gamelog_correto(espn_id)
     
     if not df_display.empty:
-        # Converter estatísticas para inteiros para calcular as médias no topo
         pts_num = pd.to_numeric(df_display['PTS'], errors='coerce').fillna(0)
         reb_num = pd.to_numeric(df_display['REB'], errors='coerce').fillna(0)
         ast_num = pd.to_numeric(df_display['AST'], errors='coerce').fillna(0)
@@ -199,7 +199,7 @@ try:
         
         st.divider()
         
-        # Renderização da Tabela HTML Centralizada
+        # Renderização da Tabela HTML Centralizada com FP incluído
         html_table = df_display.to_html(classes='nba-table', index=False, escape=False)
         st.markdown(f'<div class="tabela-container">{html_table}</div>', unsafe_allow_html=True)
     else:
