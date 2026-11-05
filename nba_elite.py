@@ -100,7 +100,7 @@ def obter_elenco_time(team_abbr):
 
 @st.cache_data(ttl=1800)
 def obter_gamelog_exato(espn_id):
-    """Busca o histórico de partidas garantindo os índices numéricos das estatísticas."""
+    """Busca o histórico de partidas com o alinhamento exato de todas as colunas."""
     url = f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
     try:
         res = requests.get(url, timeout=15)
@@ -130,7 +130,7 @@ def obter_gamelog_exato(espn_id):
                         
                         stats = event.get('stats', [])
                         
-                        # Mapeamento com posições ajustadas para a imagem oficial de comparação
+                        # Inversão única e estrita de RBD e BLQ mantendo BP e FP intactas
                         if stats and len(stats) >= 13:
                             minutos = stats[0]
                             aq = stats[1]
@@ -138,10 +138,10 @@ def obter_gamelog_exato(espn_id):
                             ll = stats[5]
                             reb = stats[7]
                             ast = stats[8]
-                            rbd = stats[9]   # Roubos de bola (STL -> 1 em 05/11)
-                            blq = stats[10]  # Tocos/Bloqueios (BLK -> 1 em 05/11)
-                            fp = stats[11]   # Faltas Pessoais (PF -> 1 em 05/11)
-                            bp = stats[12]   # Turnovers/Bolas Perdidas (TO -> 6 em 05/11)
+                            blq = stats[9]   # Tocos/Bloqueios (BLK -> 1 em 05/11, 1 em 01/11)
+                            rbd = stats[10]  # Roubos de bola (STL -> 1 em 05/11, 5 em 01/11)
+                            fp = stats[11]   # Faltas Pessoais (PF -> mantido)
+                            bp = stats[12]   # Turnovers/Bolas Perdidas (TO -> mantido)
                             pts = stats[13] if len(stats) > 13 else stats[1]
                             
                             logs.append({
@@ -153,10 +153,10 @@ def obter_gamelog_exato(espn_id):
                                 'LL': ll,
                                 'REB': reb,
                                 'AST': ast,
-                                'RBD': rbd,
-                                'BLQ': blq,
-                                'BP': bp,  # Bolas Perdidas (6 no jogo 05/11)
-                                'FP': fp   # Faltas Pessoais (1 no jogo 05/11)
+                                'RBD': rbd,  # Roubos de bola
+                                'BLQ': blq,  # Tocos/Bloqueios
+                                'BP': bp,    # Bolas Perdidas
+                                'FP': fp     # Faltas Pessoais
                             })
             return pd.DataFrame(logs)
     except Exception:
