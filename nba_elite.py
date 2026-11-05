@@ -4,6 +4,19 @@ from nba_api.stats.static import teams
 from nba_api.stats.endpoints import commonteamroster, playergamelog
 
 # ==========================================
+# CONFIGURAÇÃO DE HEADERS PARA EVITAR BLOQUEIO/TIMEOUT
+# ==========================================
+CUSTOM_HEADERS = {
+    'Host': 'stats.nba.com',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Referer': 'https://www.nba.com/'
+}
+
+# ==========================================
 # CONFIGURAÇÃO DA PÁGINA
 # ==========================================
 st.set_page_config(page_title="NBA Elite Analytics", layout="wide")
@@ -63,14 +76,23 @@ def obter_todos_times():
 
 @st.cache_data(ttl=3600)
 def obter_elenco_time(team_id):
-    """Retorna os jogadores da equipa selecionada."""
-    roster = commonteamroster.CommonTeamRoster(team_id=team_id).get_data_frames()[0]
+    """Retorna os jogadores da equipa selecionada com headers e timeout estendido."""
+    roster = commonteamroster.CommonTeamRoster(
+        team_id=team_id,
+        headers=CUSTOM_HEADERS,
+        timeout=60
+    ).get_data_frames()[0]
     return roster[['PLAYER', 'PLAYER_ID']].sort_values(by="PLAYER")
 
 @st.cache_data(ttl=1800)
 def obter_logs_jogador(player_id, season="2026-27"):
-    """Busca o histórico de jogos do jogador na temporada especificada."""
-    gamelog = playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
+    """Busca o histórico de jogos do jogador com headers e timeout estendido."""
+    gamelog = playergamelog.PlayerGameLog(
+        player_id=player_id,
+        season=season,
+        headers=CUSTOM_HEADERS,
+        timeout=60
+    ).get_data_frames()[0]
     return gamelog
 
 # ==========================================
@@ -84,9 +106,13 @@ time_selecionado = st.sidebar.selectbox("Escolha o Time:", df_times['full_name']
 team_id = df_times[df_times['full_name'] == time_selecionado]['id'].values[0]
 
 # 2. Seleção do Jogador
-df_elenco = obter_elenco_time(team_id)
-jogador_selecionado = st.sidebar.selectbox("Escolha o Jogador:", df_elenco['PLAYER'].values)
-player_id = df_elenco[df_elenco['PLAYER'] == jogador_selecionado]['PLAYER_ID'].values[0]
+try:
+    df_elenco = obter_elenco_time(team_id)
+    jogador_selecionado = st.sidebar.selectbox("Escolha o Jogador:", df_elenco['PLAYER'].values)
+    player_id = df_elenco[df_elenco['PLAYER'] == jogador_selecionado]['PLAYER_ID'].values[0]
+except Exception as e:
+    st.sidebar.error("Aguardando resposta da NBA...")
+    st.stop()
 
 # 3. Seleção da Temporada
 temporada = st.sidebar.selectbox(
@@ -105,7 +131,6 @@ try:
         df_raw = obter_logs_jogador(player_id, season=temporada)
     
     if not df_raw.empty:
-        # Formatação idêntica ao layout desejado
         df_display = pd.DataFrame()
         
         # Jogo (Ex: 05/11 @ SAC ou vs MIA)
@@ -137,7 +162,7 @@ try:
         
         st.divider()
         
-        # Renderização da Tabela via HTML Customizado (Resolve o espaçamento e alinhamento)[cite: 4]
+        # Renderização da Tabela via HTML Customizado
         html_table = df_display.to_html(classes='nba-table', index=False, escape=False)
         st.markdown(f'<div class="tabela-container">{html_table}</div>', unsafe_allow_html=True)
         
