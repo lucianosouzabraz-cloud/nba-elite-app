@@ -63,7 +63,7 @@ TEAMS_ESPN = {
     "Toronto Raptors": "tor", "Utah Jazz": "uta", "Washington Wizards": "was"
 }
 
-# Dicionário de formatação legível dos adversários
+# Dicionário de nomes exatos dos times adversários
 TEAM_NAMES_MAP = {
     'SAC': 'Kings', 'MIA': 'Heat', 'TOR': 'Raptors', 'GS': 'Warriors', 'GSW': 'Warriors',
     'LAC': 'Clippers', 'POR': 'Trail Blazers', 'UTAH': 'Jazz', 'UTA': 'Jazz', 'DEN': 'Nuggets',
@@ -75,7 +75,7 @@ TEAM_NAMES_MAP = {
 }
 
 # ==========================================
-# FUNÇÕES DE BUSCA DE DADOS (BLINDADAS)
+# FUNÇÕES DE BUSCA DE DADOS
 # ==========================================
 @st.cache_data(ttl=3600)
 def obter_elenco_time(team_abbr):
@@ -99,8 +99,8 @@ def obter_elenco_time(team_abbr):
     return pd.DataFrame(columns=['PLAYER', 'ESPN_ID'])
 
 @st.cache_data(ttl=1800)
-def obter_gamelog_blindado(espn_id):
-    """Busca o histórico de partidas com mapeamento direto e seguro."""
+def obter_gamelog_exato(espn_id):
+    """Busca o histórico de partidas garantindo os índices numéricos das estatísticas."""
     url = f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{espn_id}/gamelog"
     try:
         res = requests.get(url, timeout=15)
@@ -130,18 +130,18 @@ def obter_gamelog_blindado(espn_id):
                         
                         stats = event.get('stats', [])
                         
-                        # Extração blindada com verificações de tamanho do array
-                        if stats and len(stats) >= 12:
+                        # Mapeamento com posições ajustadas para a imagem oficial de comparação
+                        if stats and len(stats) >= 13:
                             minutos = stats[0]
                             aq = stats[1]
                             tres_pt = stats[3]
                             ll = stats[5]
                             reb = stats[7]
                             ast = stats[8]
-                            blq = stats[9]   # Tocos / Bloqueios (BLK)
-                            rbd = stats[10]  # Roubos de Bola (STL)
-                            bp = stats[11]   # Turnovers / Erros (TO)
-                            fp = stats[12] if len(stats) > 12 else "0"  # Faltas Pessoais (PF)
+                            rbd = stats[9]   # Roubos de bola (STL -> 1 em 05/11)
+                            blq = stats[10]  # Tocos/Bloqueios (BLK -> 1 em 05/11)
+                            fp = stats[11]   # Faltas Pessoais (PF -> 1 em 05/11)
+                            bp = stats[12]   # Turnovers/Bolas Perdidas (TO -> 6 em 05/11)
                             pts = stats[13] if len(stats) > 13 else stats[1]
                             
                             logs.append({
@@ -153,10 +153,10 @@ def obter_gamelog_blindado(espn_id):
                                 'LL': ll,
                                 'REB': reb,
                                 'AST': ast,
-                                'RBD': rbd,  # Corregido: Roubos de bola
-                                'BLQ': blq,  # Corregido: Tocos/Bloqueios
-                                'BP': bp,    # Corregido: Turnovers
-                                'FP': fp     # Coluna extra: Faltas Pessoais
+                                'RBD': rbd,
+                                'BLQ': blq,
+                                'BP': bp,  # Bolas Perdidas (6 no jogo 05/11)
+                                'FP': fp   # Faltas Pessoais (1 no jogo 05/11)
                             })
             return pd.DataFrame(logs)
     except Exception:
@@ -192,7 +192,7 @@ st.subheader(f"📊 Estatísticas: {jogador_selecionado} ({time_selecionado}) - 
 
 try:
     with st.spinner("Buscando estatísticas atualizadas da NBA..."):
-        df_display = obter_gamelog_blindado(espn_id)
+        df_display = obter_gamelog_exato(espn_id)
     
     if not df_display.empty:
         pts_num = pd.to_numeric(df_display['PTS'], errors='coerce').fillna(0)
@@ -210,7 +210,7 @@ try:
         
         st.divider()
         
-        # Tabela HTML Centralizada e Formatada
+        # Renderização da Tabela HTML Centralizada
         html_table = df_display.to_html(classes='nba-table', index=False, escape=False)
         st.markdown(f'<div class="tabela-container">{html_table}</div>', unsafe_allow_html=True)
     else:
