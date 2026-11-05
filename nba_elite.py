@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import requests
+import unicodedata
 import time
-from nba_api.stats.static import teams
+from nba_api.stats.static import teams, players
 from nba_api.stats.endpoints import playergamelog
 
 # ==========================================
@@ -13,10 +14,10 @@ CUSTOM_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://www.nba.com/'
+    'Referer': 'https://www.nba.com/',
+    'Origin': 'https://www.nba.com'
 }
 
-# Mapeamento de IDs dos Times (NBA ID -> ESPN Abbreviation)
 TEAM_ABBR_MAP = {
     1610612737: 'atl', 1610612738: 'bos', 1610612751: 'bkn', 1610612766: 'cha',
     1610612741: 'chi', 1610612739: 'cle', 1610612742: 'dal', 1610612743: 'den',
@@ -31,7 +32,6 @@ TEAM_ABBR_MAP = {
 st.set_page_config(page_title="NBA Elite Analytics", layout="wide")
 st.title("🏀 NBA - Análise Estatística por Jogador")
 
-# Estilo CSS para centralizar e ajustar a tabela
 st.markdown("""
     <style>
     .tabela-container {
@@ -73,15 +73,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def normalizar_texto(texto):
+    """Remove acentos e caracteres especiais para comparação de nomes."""
+    return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').lower()
+
 @st.cache_data(ttl=86400)
 def obter_todos_times():
-    nba_teams = teams.get_teams()
-    df_teams = pd.DataFrame(nba_teams)
-    return df_teams.sort_values(by="full_name")
+    return pd.DataFrame(teams.get_teams()).sort_values(by="full_name")
 
 @st.cache_data(ttl=3600)
 def obter_elenco_espn(team_id):
-    """Busca elenco via API aberta da ESPN sem requisições bloqueadas por IP na nuvem."""
     abbr = TEAM_ABBR_MAP.get(team_id)
     if not abbr:
         return pd.DataFrame()
@@ -89,22 +90,19 @@ def obter_elenco_espn(team_id):
     res = requests.get(url)
     if res.status_code == 200:
         data = res.json()
-        jogadores = []
-        for athlete in data.get('athletes', []):
-            name = athlete.get('fullName')
-            # Busca ID na NBA API estática
-            jogadores.append({'PLAYER': name})
-        df = pd.DataFrame(jogadores)
-        return df.sort_values(by="PLAYER")
+        jogadores = [{'PLAYER': athlete.get('fullName')} for athlete in data.get('athletes', [])]
+        return pd.DataFrame(jogadores).sort_values(by="PLAYER")
     return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
-def obter_id_jogador_por_nome(nome_jogador):
-    from nba_api.stats.static import players
-    found = players.find_players_by_full_name(nome_jogador)
-    if found:
-        return found[0]['id']
-    return None
+@st.cache_data(ttl=86400)
+def Mapeamento_Ids_Jogadores():
+    """Cria um dicionário com busca por nome normalizado sem acentos."""
+    todos_jogadores = players.get_active_players()
+    mapa = {}
+    for p in todos_jogadores:
+        nome_normal = normalizar_texto(p['full_name'])
+        mapa[nome_normal] = p['id']
+    return mapa
 
 @st.cache_data(ttl=1800)
 def obter_logs_jogador(player_id, season="2026-27"):
@@ -131,12 +129,13 @@ df_times = obter_todos_times()
 time_selecionado = st.sidebar.selectbox("Escolha o Time:", df_times['full_name'].values)
 team_id = df_times[df_times['full_name'] == time_selecionado]['id'].values[0]
 
-# Carrega elenco usando API ESPN
 df_elenco = obter_elenco_espn(team_id)
+mapa_jogadores = Mapeamento_Ids_Jogadores()
 
 if not df_elenco.empty:
     jogador_selecionado = st.sidebar.selectbox("Escolha o Jogador:", df_elenco['PLAYER'].values)
-    player_id = obter_id_jogador_por_nome(jogador_selecionado)
+    nome_norm = normalizar_texto(jogador_selecionado)
+    player_id = mapa_jogadores.get(nome_norm)
 else:
     st.sidebar.error("Erro ao carregar o elenco.")
     st.stop()
@@ -180,6 +179,6 @@ if player_id:
         else:
             st.warning(f"O jogador {jogador_selecionado} não possui partidas registradas nesta temporada.")
     except Exception as e:
-        st.error(f"Erro ao buscar logs do jogador: {e}")
+        st.error(f"Erro ao carregar dados: {e}")
 else:
-    st.warning("ID do jogador não encontrado na base de dados.")
+    st.warning("ID do jogador não encontrado na base de dados da NBA.")
